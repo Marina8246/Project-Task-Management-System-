@@ -1,0 +1,175 @@
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from passlib.context import CryptContext
+
+from app.database import get_db
+from app.models import UserDB
+from app.schemas import (
+    RegisterWithRole,
+    LoginData,
+    TokenResponse,
+    RegisterResponse
+)
+from app.dependencies import create_token, require_admin
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["Auth"])
+
+pwd_context = CryptContext(
+    schemes=["bcrypt"],
+    deprecated="auto"
+)
+
+
+@router.post(
+    "/register-with-role",
+    status_code=201,
+    response_model=RegisterResponse
+)
+def register_with_role(
+    user: RegisterWithRole,
+    payload: dict = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    try:
+
+        existing_user = db.query(UserDB).filter(
+            UserDB.username == user.username.lower()
+        ).first()
+
+        if existing_user:
+
+            logger.warning(
+                f"USER CREATION FAILED: Username '{user.username}' already exists"
+            )
+
+            raise HTTPException(
+                status_code=400,
+                detail="User already exists"
+            )
+
+        if user.email:
+
+            existing_email = db.query(UserDB).filter(
+                UserDB.email == user.email
+            ).first()
+
+            if existing_email:
+
+                logger.warning(
+                    f"USER CREATION FAILED: Email '{user.email}' already exists"
+                )
+
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email already in use"
+                )
+
+        new_user = UserDB(
+            username=user.username.lower(),
+            password=pwd_context.hash(user.password),
+            role=user.role,
+            email=user.email
+        )
+
+        db.add(new_user)
+
+        db.commit()
+
+        db.refresh(new_user)
+
+        logger.info(
+            f"USER CREATED: Admin '{payload.get('sub')}' "
+            f"created user '{new_user.username}' "
+            f"with role '{new_user.role}'"
+        )
+
+        return {
+            "message": "User created successfully",
+            "username": new_user.username,
+            "role": new_user.role
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        logger.error(f"Unexpected error: {e}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
+
+
+@router.post(
+    "/login",
+    response_model=TokenResponse
+)
+def login(
+    data: LoginData,
+    db: Session = Depends(get_db)
+):
+    try:
+
+        user = db.query(UserDB).filter(
+            UserDB.username == data.username.lower()
+        ).first()
+
+        if not user or not pwd_context.verify(
+            data.password,
+            user.password
+        ):
+
+            logger.warning(
+                f"LOGIN FAILED: Invalid credentials for '{data.username}'"
+            )
+
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid credentials"
+            )
+
+        token = create_token({
+            "sub": user.username,
+            "id": user.id,
+            "role": user.role
+        })
+
+        logger.info(
+            f"LOGIN SUCCESS: User '{user.username}' "
+            f"(ID:{user.id}, role={user.role}) logged in"
+        )
+
+        return {
+            "access_token": token,
+            "token_type": "bearer"
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+
+        logger.error(f"Unexpected error: {e}")
+
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
+
+
+@router.get("/test-auth")
+def test_auth(
+    payload: dict = Depends(require_admin)
+):
+    return {
+        "message": "Token valid and you are admin!",
+        "username": payload.get("sub"),
+        "user_id": payload.get("id"),
+        "role": payload.get("role")
+    }
