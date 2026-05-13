@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 
 from dotenv import load_dotenv
+from collections import defaultdict
+import time
 
+request_counts = defaultdict(int)
+response_times = []
+error_counts = defaultdict(int)
 load_dotenv()
 
 
