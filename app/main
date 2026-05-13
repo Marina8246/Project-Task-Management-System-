@@ -109,7 +109,17 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
-
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    duration = round((time.time() - start) * 1000, 2)
+    endpoint = request.url.path
+    request_counts[endpoint] += 1
+    response_times.append({"endpoint": endpoint, "ms": duration})
+    if response.status_code >= 400:
+        error_counts[endpoint] += 1
+    return response
 
 @app.exception_handler(Exception)
 async def global_exception_handler(
